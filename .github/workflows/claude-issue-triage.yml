@@ -1,0 +1,70 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+concurrency:
+  group: triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # En ediciones, solo re-analizar si cambió el título o el cuerpo; ignorar eventos de bots
+    if: |
+      github.event.sender.type != 'Bot' &&
+      (github.event.action == 'opened' || github.event.changes.title || github.event.changes.body)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Issue Triage
+        id: claude-triage
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Read,Glob,Grep,Write,Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh label list:*)"'
+          prompt: |
+            Eres el encargado de hacer triage de issues del repositorio ${{ github.repository }}, un Tetris en JavaScript vanilla.
+            Analiza la issue #${{ github.event.issue.number }} (evento: ${{ github.event.action }}).
+
+            Pasos:
+            1. Lee la issue con `gh issue view ${{ github.event.issue.number }} --comments`.
+            2. Obtén los labels disponibles con `gh label list`.
+            3. Lee `CLAUDE.md` y el código relevante (`index.html`, `style.css`, `game.js`) para ubicar el problema.
+            4. Aplica los labels apropiados usando SOLO labels existentes:
+               `gh issue edit ${{ github.event.issue.number }} --add-label "label1,label2"`.
+               Si el evento es `edited`, quita con `--remove-label` los labels que ya no apliquen.
+               Si la issue es ambigua o le falta información, añade `question`.
+            5. Escribe el diagnóstico en un archivo `triage-diagnostico.md` (con la herramienta Write) y publícalo
+               como un único comentario, actualizando el anterior si existe:
+               `gh issue comment ${{ github.event.issue.number }} --edit-last --create-if-none --body-file triage-diagnostico.md`
+
+            Formato del diagnóstico (en español, Markdown):
+            ## 🔍 Diagnóstico automático
+            - **Resumen:** qué se reporta o solicita.
+            - **Tipo y labels aplicados:** con una justificación breve.
+            ### Análisis técnico
+            Archivos y funciones afectadas (por ejemplo `tryRotate()`, `clearLines()`, `loop()` en `game.js`), con referencias `archivo:línea`.
+            ### Causa probable / Enfoque propuesto
+            Causa raíz probable si es un bug; enfoque de diseño si es una mejora.
+            ### Pasos sugeridos de implementación
+            Lista numerada y concreta de cambios en el código.
+            ### Riesgos y casos borde
+            ### Cómo verificar
+            ### Información faltante
+            (Solo si aplica.)
+
+            Reglas:
+            - No modifiques ningún archivo del repositorio ni crees ramas o PRs; solo analiza, etiqueta y comenta.
+            - No escribas "@claude" en el comentario.
+            - Sé concreto y basa el diagnóstico en el código real, no en suposiciones.
